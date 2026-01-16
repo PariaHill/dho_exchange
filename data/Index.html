@@ -618,14 +618,27 @@
         }
         
         // 획득 장소 표시 (Port 또는 Town)
-        let locationDisplay = mat.location || '';
-        if (mat.towns && mat.towns.length > 0) {
-          // Town 마을 중복 제거
-          const uniqueTowns = [...new Set(mat.towns)];
-          if (locationDisplay) locationDisplay += ' / ';
-          locationDisplay += uniqueTowns.join(', ');
+        let locationDisplay = '';
+        const allLocations = [];
+        
+        // Port location 추가 (다양한 구분자로 split)
+        if (mat.location) {
+          // 전각/반각 쉼표, 슬래시, 세미콜론 등으로 구분
+          const portLocations = mat.location
+            .split(/[,，\/;、]/)  // 영문쉼표, 한글쉼표, 슬래시, 세미콜론, 일본쉼표
+            .map(loc => loc.trim())
+            .filter(loc => loc);
+          allLocations.push(...portLocations);
         }
-        if (!locationDisplay) locationDisplay = '-';
+        
+        // Town 마을 추가
+        if (mat.towns && mat.towns.length > 0) {
+          allLocations.push(...mat.towns);
+        }
+        
+        // 중복 제거 후 표시
+        const uniqueLocations = [...new Set(allLocations)];
+        locationDisplay = uniqueLocations.length > 0 ? uniqueLocations.join(', ') : '-';
         
         row.innerHTML = `
           <td>${mat.name}</td>
