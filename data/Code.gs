@@ -223,7 +223,10 @@ function getTownData() {
       if (!towns[itemName]) {
         towns[itemName] = [];
       }
-      towns[itemName].push(townName);
+      // 중복 체크: 같은 마을이 이미 있으면 추가하지 않음
+      if (!towns[itemName].includes(townName)) {
+        towns[itemName].push(townName);
+      }
     });
   }
   
