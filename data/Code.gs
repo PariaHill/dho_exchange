@@ -11,90 +11,72 @@ function doGet() {
 }
 
 /**
- * 모든 아이템 정보 가져오기
+ * Exchanges 시트 데이터 가져오기
  */
-function getAllItems() {
+function getExchangesData() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const itemsSheet = ss.getSheetByName('Items');
-  const data = itemsSheet.getDataRange().getValues();
+  const exchangesSheet = ss.getSheetByName('Exchanges');
+  if (!exchangesSheet) return {};
   
-  // 헤더 제외하고 반환
-  const items = [];
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0]) { // 아이템명이 있는 행만
-      items.push({
-        name: data[i][0],
-        location: data[i][1],
-        type: data[i][2], // 아이템타입
-        notes: data[i][3]
-      });
-    }
-  }
-  
-  return items;
-}
-
-/**
- * 레시피 정보 가져오기
- */
-function getRecipes() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const recipesSheet = ss.getSheetByName('Recipes');
-  const data = recipesSheet.getDataRange().getValues();
-  
-  const recipes = {};
+  const data = exchangesSheet.getDataRange().getValues();
+  const exchanges = {};
   
   // 헤더 제외
   for (let i = 1; i < data.length; i++) {
-    const productName = data[i][0]; // 완성품명
-    const materialName = data[i][1]; // 재료명
-    const quantity = data[i][2];
-    const outputQuantity = data[i][3] || 1; // 결과물수량 (기본값 1)
+    const itemName = data[i][0]; // 물물교환품목
+    const materialsStr = data[i][1]; // 재료 (/ 구분)
+    const quantitiesStr = data[i][2]; // 수량 (/ 구분)
     
-    if (!productName || !materialName) continue;
+    if (!itemName || !materialsStr || !quantitiesStr) continue;
     
-    if (!recipes[productName]) {
-      recipes[productName] = {
-        materials: [],
-        outputQuantity: outputQuantity
-      };
-    }
+    // 재료 파싱
+    const materials = String(materialsStr).split('/').map(m => m.trim());
     
-    recipes[productName].materials.push({
-      materialName: materialName,
-      quantity: quantity
-    });
+    // 수량 파싱: 첫번째=결과물, 나머지=재료별 필요량
+    const quantities = String(quantitiesStr).split('/').map(q => parseFloat(q.trim()));
+    
+    const outputQuantity = quantities[0] || 1; // 결과물 수량
+    const materialQuantities = quantities.slice(1); // 재료별 필요 수량
+    
+    exchanges[itemName] = {
+      name: itemName,
+      outputQuantity: outputQuantity,
+      materials: materials.map((mat, idx) => ({
+        name: mat,
+        quantity: materialQuantities[idx] || 1
+      }))
+    };
   }
   
-  return recipes;
+  return exchanges;
 }
 
 /**
- * 특정 아이템 제작에 필요한 모든 재료 계산
+ * 완성품 목록 가져오기 (Exchanges에서)
+ */
+function getFinishedItems() {
+  const exchanges = getExchangesData();
+  return Object.keys(exchanges).map(name => ({
+    name: name,
+    type: '완성품'
+  }));
+}
+
+/**
+ * 특정 아이템 제작에 필요한 모든 재료 계산 (새 구조)
  */
 function calculateMaterials(targetItemName, exchangeCount) {
-  const items = getAllItems();
-  const recipes = getRecipes();
+  const exchanges = getExchangesData();
+  const trades = getTradeData();
   const towns = getTownData();
-  
-  // 아이템명 -> 정보 매핑
-  const itemMap = {};
-  items.forEach(item => {
-    itemMap[item.name] = item;
-  });
   
   // 최종 재료 집계 (기본 재료 + 중간 재료)
   const totalMaterials = {};
-  
-  // 트리 구조 (UI 표시용)
-  const tree = [];
   
   /**
    * 재귀적으로 재료 계산
    */
   function traverse(itemName, exchangeCount, depth, path) {
-    const item = itemMap[itemName];
-    
     // 순환 참조 방지
     if (path.includes(itemName)) {
       return {
@@ -108,27 +90,31 @@ function calculateMaterials(targetItemName, exchangeCount) {
     }
     
     const newPath = [...path, itemName];
-    const recipe = recipes[itemName];
+    const exchange = exchanges[itemName];
     
-    // 레시피가 없으면 기본 재료
-    if (!recipe || recipe.materials.length === 0) {
+    // Exchanges에 레시피가 없으면 기본 재료
+    if (!exchange || !exchange.materials || exchange.materials.length === 0) {
       if (!totalMaterials[itemName]) {
+        // Trade에서 도시 정보 찾기
+        const tradeInfo = trades[itemName] || {};
+        const cities = tradeInfo.cities || [];
+        
         totalMaterials[itemName] = {
           name: itemName,
           quantity: 0,
-          location: item ? item.location : '',
+          location: cities.join(', '),
           isBase: true,
           towns: towns[itemName] || []
         };
       }
-      // 기본 재료는 교환 횟수가 곧 필요 수량
+      // 기본 재료는 필요 수량 누적
       totalMaterials[itemName].quantity += exchangeCount;
       
       return {
         name: itemName,
         exchangeCount: exchangeCount,
         outputQuantity: exchangeCount,
-        location: item ? item.location : '',
+        location: totalMaterials[itemName].location,
         isBase: true,
         depth: depth,
         children: []
@@ -136,7 +122,7 @@ function calculateMaterials(targetItemName, exchangeCount) {
     }
     
     // 하위 재료가 있는 경우 (중간 재료)
-    const outputQuantity = recipe.outputQuantity || 1;
+    const outputQuantity = exchange.outputQuantity || 1;
     const totalOutput = exchangeCount * outputQuantity; // 총 생산량
     
     // 중간 재료도 집계에 추가 (depth > 0일 때만, 즉 루트 제외)
@@ -146,7 +132,7 @@ function calculateMaterials(targetItemName, exchangeCount) {
           name: itemName,
           quantity: 0,
           exchangeCount: 0,
-          location: item ? item.location : '',
+          location: '',
           isBase: false,
           outputQuantity: outputQuantity,
           towns: towns[itemName] || []
@@ -157,22 +143,22 @@ function calculateMaterials(targetItemName, exchangeCount) {
     }
     
     const children = [];
-    recipe.materials.forEach(mat => {
+    exchange.materials.forEach(mat => {
       // 필요한 재료의 총량 계산
       const neededMaterialQuantity = mat.quantity * exchangeCount;
       
-      // 하위 재료의 레시피 확인
-      const subRecipe = recipes[mat.materialName];
-      if (subRecipe) {
+      // 하위 재료의 레시피 확인 (Exchanges에서)
+      const subExchange = exchanges[mat.name];
+      if (subExchange) {
         // 하위 재료도 교환으로 만들어야 하는 경우
-        const subOutputQuantity = subRecipe.outputQuantity || 1;
+        const subOutputQuantity = subExchange.outputQuantity || 1;
         // 필요한 교환 횟수 계산 (올림)
         const neededExchanges = Math.ceil(neededMaterialQuantity / subOutputQuantity);
-        const childNode = traverse(mat.materialName, neededExchanges, depth + 1, newPath);
+        const childNode = traverse(mat.name, neededExchanges, depth + 1, newPath);
         children.push(childNode);
       } else {
-        // 기본 재료인 경우 - 필요 수량이 곧 교환 횟수
-        const childNode = traverse(mat.materialName, neededMaterialQuantity, depth + 1, newPath);
+        // 기본 재료인 경우 - 필요 수량이 곧 필요량
+        const childNode = traverse(mat.name, neededMaterialQuantity, depth + 1, newPath);
         children.push(childNode);
       }
     });
@@ -181,7 +167,7 @@ function calculateMaterials(targetItemName, exchangeCount) {
       name: itemName,
       exchangeCount: exchangeCount,
       outputQuantity: totalOutput,
-      location: item ? item.location : '',
+      location: '',
       isBase: false,
       depth: depth,
       children: children
@@ -450,13 +436,7 @@ function getSeasonInfo(materialName) {
  * 웹앱에서 호출할 함수들
  */
 function getItemList() {
-  return getAllItems();
-}
-
-function getFinishedItems() {
-  const items = getAllItems();
-  // 아이템타입이 "완성품"인 것만 필터링
-  return items.filter(item => item.type === '완성품');
+  return getFinishedItems();
 }
 
 function calculate(itemName, quantity) {
